@@ -1,0 +1,2 @@
+description = "A hello + counter contract. Start here: shows contract structure, instance storage, and tests."
+order = 10

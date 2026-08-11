@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Templates can break without anyone touching this repository: a new
+  # soroban-sdk release may deprecate an API the templates use. A weekly run
+  # surfaces that as a failed build rather than as a bug report from someone
+  # whose first generated project did not compile.
+  schedule:
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  STELLAR_CLI_VERSION: "27.1.0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format, lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component rustfmt --component clippy
+          rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-check-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-check-
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all-features
+
+      - name: Documentation
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The job that matters most. Lumenprint's own tests only check that the right
+  # text reached the right files; they cannot tell whether that text still
+  # compiles against the current SDK. This job generates every template and
+  # treats it as a real project: formatting, lints, tests, and a wasm build with
+  # the Stellar CLI. A template that does not compile is worse than no template.
+  templates:
+    name: Generate and verify every template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component rustfmt --component clippy
+          rustup default stable
+          rustup target add wasm32v1-none
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-templates-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-templates-
+
+      # Cached separately and keyed on the version, because building the CLI from
+      # source takes longer than everything else in this workflow combined.
+      - name: Cache Stellar CLI
+        id: cache-stellar
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/stellar
+          key: stellar-cli-${{ env.STELLAR_CLI_VERSION }}-${{ runner.os }}
+
+      - name: Install Stellar CLI
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: cargo install --locked stellar-cli@${{ env.STELLAR_CLI_VERSION }}
+
+      - name: Verify templates
+        run: ./scripts/verify-templates.sh
+
+  msrv:
+    name: Build on the declared MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keeps the rust-version in Cargo.toml honest. Lumenprint's own MSRV is
+      # lower than the SDK's, since it is a native CLI and never compiled to wasm.
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.85 --profile minimal
+          rustup default 1.85
+
+      - name: Build
+        run: cargo build --all-targets

@@ -1,0 +1,75 @@
+#![cfg(test)]
+//! Tests run natively, not in wasm: `Env::default()` is a full in-memory host,
+//! so `cargo test` needs no network, no deployment and no Stellar CLI.
+
+use super::*;
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+
+/// Register the contract in a fresh environment and return a typed client.
+///
+/// `#[contractimpl]` generates `{% contract_name %}Client` from the `impl` block,
+/// which is how tests call contract functions.
+fn setup() -> ({% contract_name %}Client<'static>, Env) {
+    let env = Env::default();
+    let contract_id = env.register({% contract_name %}, ());
+    let client = {% contract_name %}Client::new(&env, &contract_id);
+    (client, env)
+}
+
+#[test]
+fn hello_greets_the_given_name() {
+    let (client, env) = setup();
+
+    let words = client.hello(&String::from_str(&env, "Dev"));
+
+    assert_eq!(
+        words,
+        vec![
+            &env,
+            String::from_str(&env, "Hello"),
+            String::from_str(&env, "Dev"),
+        ]
+    );
+}
+
+#[test]
+fn counter_starts_at_zero() {
+    let (client, _env) = setup();
+
+    assert_eq!(client.get_count(), 0);
+}
+
+#[test]
+fn increment_accumulates_across_calls() {
+    let (client, _env) = setup();
+
+    assert_eq!(client.increment(), 1);
+    assert_eq!(client.increment(), 2);
+    assert_eq!(client.increment(), 3);
+    assert_eq!(client.get_count(), 3);
+}
+
+#[test]
+fn state_is_isolated_between_contract_instances() {
+    // Each registration gets its own storage, which is what makes tests
+    // independent of each other.
+    let env = Env::default();
+    let first = {% contract_name %}Client::new(&env, &env.register({% contract_name %}, ()));
+    let second = {% contract_name %}Client::new(&env, &env.register({% contract_name %}, ()));
+
+    first.increment();
+
+    assert_eq!(first.get_count(), 1);
+    assert_eq!(second.get_count(), 0);
+}
+
+#[test]
+fn unrelated_addresses_can_be_generated_for_tests() {
+    // `Address::generate` is the standard way to get test identities; the
+    // `access` and `token` templates rely on it heavily.
+    let env = Env::default();
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+
+    assert_ne!(a, b);
+}

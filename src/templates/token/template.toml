@@ -1,0 +1,2 @@
+description = "A fungible-token skeleton: balances, transfer, mint and burn. A starting point, not an audited token."
+order = 30

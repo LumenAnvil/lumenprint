@@ -1,0 +1,118 @@
+#![no_std]
+//! {% project_name %} — a contract with a single privileged administrator.
+//!
+//! The pattern here is the one most contracts need before anything else: some
+//! functions anyone may call, and some only the admin may call. Two details make
+//! it safe, and both are easy to get wrong:
+//!
+//! 1. The admin is set in `__constructor`, which the host runs atomically with
+//!    deployment. A separate `initialize` function that anyone may call first is
+//!    a well-known way to lose a contract between deploy and setup.
+//! 2. Privileged functions call `require_auth`, which makes the host verify a
+//!    signature from that address. Comparing an address argument against the
+//!    stored admin proves nothing on its own — the caller chooses the argument.
+//!
+//! Build with `{% build_command %}`.
+
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
+
+/// Ledgers closed in roughly one day, at the network's ~5 second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+
+/// How far into the future a touched entry's lifetime is pushed.
+///
+/// Contract data is archived once its time-to-live runs out, which is why a
+/// contract that passed every test can start failing weeks after deployment.
+const TTL_BUMP: u32 = 30 * DAY_IN_LEDGERS;
+
+/// Remaining lifetime below which an entry is bumped again.
+const TTL_THRESHOLD: u32 = TTL_BUMP - DAY_IN_LEDGERS;
+
+/// Keys for this contract's instance storage.
+///
+/// An enum keeps keys in one place and lets the compiler catch typos, which
+/// bare symbols would not.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// The current administrator.
+    Admin,
+    /// The admin-controlled value this contract guards.
+    Value,
+}
+
+/// Errors this contract returns.
+///
+/// Returning a typed error rather than panicking gives callers a `try_*` variant
+/// that reports the reason, and keeps the error stable across releases.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    /// Storage held no admin. Unreachable via the constructor, but returned
+    /// rather than unwrapped so a storage bug cannot become a panic.
+    NotInitialized = 1,
+}
+
+#[contract]
+pub struct {% contract_name %};
+
+#[contractimpl]
+impl {% contract_name %} {
+    /// Set the initial administrator.
+    ///
+    /// The host runs this exactly once, as part of deployment, so there is no
+    /// window in which the contract exists without an admin.
+    pub fn __constructor(env: Env, admin: Address) {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    /// Return the current administrator.
+    pub fn admin(env: Env) -> Result<Address, Error> {
+        read_admin(&env)
+    }
+
+    /// Return the stored value. Open to everyone.
+    pub fn value(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Value).unwrap_or(0)
+    }
+
+    /// Replace the stored value. Admin only.
+    pub fn set_value(env: Env, value: u32) -> Result<(), Error> {
+        let admin = read_admin(&env)?;
+
+        // The authorization check. Without this line every caller is an admin.
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Value, &value);
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
+
+        Ok(())
+    }
+
+    /// Hand administration to `new_admin`. Admin only.
+    ///
+    /// This is a direct transfer: if `new_admin` is an address nobody controls,
+    /// the contract is left unadministrable. Contracts that need a safety net
+    /// use a two-step transfer, where the new admin must accept before the
+    /// change takes effect.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin = read_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
+
+        Ok(())
+    }
+}
+
+/// Read the admin, or report that storage is empty.
+fn read_admin(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)
+}
+
+mod test;

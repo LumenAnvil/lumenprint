@@ -1,0 +1,35 @@
+[package]
+name = "{% project_name %}"
+version = "0.1.0"
+edition = "{% rust_edition %}"
+rust-version = "{% msrv %}"
+publish = false
+
+[lib]
+# Soroban contracts are built as C-compatible dynamic libraries, which is what
+# the wasm target consumes. `cargo test` still works: Cargo builds a separate
+# test harness from the same sources.
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "{% sdk_version %}"
+
+[dev-dependencies]
+# `testutils` provides Env::register, Address::generate and the auth mocks used
+# in src/test.rs. It must stay a dev-dependency: enabling it in a release build
+# bloats the wasm and is rejected on deploy.
+soroban-sdk = { version = "{% sdk_version %}", features = ["testutils"] }
+
+# These settings keep the deployed wasm small and its arithmetic checked.
+# `overflow-checks` is on in release on purpose: a silent wrap in a contract is a
+# vulnerability, and panicking costs less than being wrong.
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

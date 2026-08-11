@@ -1,0 +1,298 @@
+#![no_std]
+//! {% project_name %} — a fungible-token skeleton.
+//!
+//! # This is a starting point, not a finished token
+//!
+//! This contract has **not been audited** and does **not** implement the full
+//! [SEP-41 token interface](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md)
+//! (`soroban_sdk::token::TokenInterface`). Notably it has no allowance or
+//! `transfer_from` support, which wallets, DEXes and most integrations expect.
+//! Deploying it as-is gives you a token nothing else knows how to talk to.
+//!
+//! It exists to show how balances, authorization, supply accounting and events
+//! fit together in a contract you can read in one sitting. For a real token:
+//!
+//! - wrapping an existing Stellar asset? Use the built-in Stellar Asset Contract
+//!   rather than writing one.
+//! - need a custom token? Implement `TokenInterface` in full, and get it audited.
+//!
+//! Build with `{% build_command %}`.
+
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Env, String,
+};
+
+/// Ledgers closed in roughly one day, at the network's ~5 second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+
+/// How far into the future a touched entry's lifetime is pushed.
+///
+/// Contract data is archived once its time-to-live runs out, which is why a
+/// contract that passed every test can start failing weeks after deployment.
+const TTL_BUMP: u32 = 30 * DAY_IN_LEDGERS;
+
+/// Remaining lifetime below which an entry is bumped again.
+///
+/// Extending only when the entry is close to expiring avoids paying to rewrite
+/// the time-to-live on every single access.
+const TTL_THRESHOLD: u32 = TTL_BUMP - DAY_IN_LEDGERS;
+
+/// Keys for this contract's storage.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// The address allowed to mint.
+    Admin,
+    /// Descriptive metadata, set once at construction.
+    Metadata,
+    /// Total tokens in existence.
+    TotalSupply,
+    /// One holder's balance.
+    Balance(Address),
+}
+
+/// Descriptive metadata, mirroring the fields SEP-41 exposes.
+#[contracttype]
+#[derive(Clone)]
+pub struct Metadata {
+    /// Number of decimal places the smallest unit represents.
+    pub decimals: u32,
+    /// Human-readable name, e.g. "Example Token".
+    pub name: String,
+    /// Ticker symbol, e.g. "EXTK".
+    pub symbol: String,
+}
+
+/// Emitted when tokens move between accounts.
+///
+/// `#[contractevent]` derives the topics and data layout: the struct name becomes
+/// the first topic in snake case (`transfer`), each `#[topic]` field is indexed so
+/// off-chain consumers can filter on it, and the remaining field is the payload.
+#[contractevent(data_format = "single-value")]
+#[derive(Clone)]
+pub struct Transfer {
+    #[topic]
+    pub from: Address,
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
+}
+
+/// Emitted when new tokens are created.
+#[contractevent(data_format = "single-value")]
+#[derive(Clone)]
+pub struct Mint {
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
+}
+
+/// Emitted when tokens are destroyed.
+#[contractevent(data_format = "single-value")]
+#[derive(Clone)]
+pub struct Burn {
+    #[topic]
+    pub from: Address,
+    pub amount: i128,
+}
+
+/// Errors this contract returns.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    /// Storage held no admin or metadata.
+    NotInitialized = 1,
+    /// A negative amount was supplied. Amounts are `i128` for compatibility with
+    /// the token interface, so negatives are representable and must be rejected:
+    /// a negative transfer would otherwise move value backwards.
+    NegativeAmount = 2,
+    /// The account does not hold enough to cover the operation.
+    InsufficientBalance = 3,
+    /// The total supply would exceed `i128::MAX`.
+    SupplyOverflow = 4,
+}
+
+#[contract]
+pub struct {% contract_name %};
+
+#[contractimpl]
+impl {% contract_name %} {
+    /// Create the token with an admin and its descriptive metadata.
+    ///
+    /// Runs atomically with deployment, so there is no window in which the token
+    /// exists without an admin.
+    pub fn __constructor(env: Env, admin: Address, decimals: u32, name: String, symbol: String) {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(
+            &DataKey::Metadata,
+            &Metadata {
+                decimals,
+                name,
+                symbol,
+            },
+        );
+        env.storage().instance().set(&DataKey::TotalSupply, &0i128);
+    }
+
+    /// The address allowed to mint.
+    pub fn admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Decimal places for display.
+    pub fn decimals(env: Env) -> Result<u32, Error> {
+        Ok(read_metadata(&env)?.decimals)
+    }
+
+    /// Human-readable token name.
+    pub fn name(env: Env) -> Result<String, Error> {
+        Ok(read_metadata(&env)?.name)
+    }
+
+    /// Ticker symbol.
+    pub fn symbol(env: Env) -> Result<String, Error> {
+        Ok(read_metadata(&env)?.symbol)
+    }
+
+    /// Tokens in existence.
+    pub fn total_supply(env: Env) -> i128 {
+        read_supply(&env)
+    }
+
+    /// Balance held by `id`. Unknown addresses hold zero.
+    pub fn balance(env: Env, id: Address) -> i128 {
+        read_balance(&env, &id)
+    }
+
+    /// Move `amount` from `from` to `to`.
+    ///
+    /// Requires authorization from `from` — the account losing value, which is
+    /// the only signature that makes a transfer legitimate.
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) -> Result<(), Error> {
+        from.require_auth();
+        check_amount(amount)?;
+
+        let from_balance = read_balance(&env, &from);
+        if from_balance < amount {
+            return Err(Error::InsufficientBalance);
+        }
+
+        // Debit before crediting. A self-transfer therefore nets to zero rather
+        // than doubling the balance, because the credit re-reads the debited value.
+        write_balance(&env, &from, from_balance - amount);
+        let to_balance = read_balance(&env, &to);
+        write_balance(&env, &to, to_balance + amount);
+
+        Transfer { from, to, amount }.publish(&env);
+
+        Ok(())
+    }
+
+    /// Create `amount` new tokens held by `to`. Admin only.
+    pub fn mint(env: Env, to: Address, amount: i128) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        check_amount(amount)?;
+
+        // Checked explicitly rather than relying on the profile's overflow-checks,
+        // so callers get a typed error instead of a trapped contract.
+        let supply = read_supply(&env)
+            .checked_add(amount)
+            .ok_or(Error::SupplyOverflow)?;
+        write_supply(&env, supply);
+
+        let balance = read_balance(&env, &to);
+        write_balance(&env, &to, balance + amount);
+
+        Mint { to, amount }.publish(&env);
+
+        Ok(())
+    }
+
+    /// Destroy `amount` of `from`'s tokens.
+    ///
+    /// Requires authorization from `from`: the admin may create tokens but may
+    /// not destroy someone else's.
+    pub fn burn(env: Env, from: Address, amount: i128) -> Result<(), Error> {
+        from.require_auth();
+        check_amount(amount)?;
+
+        let balance = read_balance(&env, &from);
+        if balance < amount {
+            return Err(Error::InsufficientBalance);
+        }
+
+        write_balance(&env, &from, balance - amount);
+        write_supply(&env, read_supply(&env) - amount);
+
+        Burn { from, amount }.publish(&env);
+
+        Ok(())
+    }
+}
+
+/// Reject negative amounts. Zero is allowed, matching the token interface.
+fn check_amount(amount: i128) -> Result<(), Error> {
+    if amount < 0 {
+        return Err(Error::NegativeAmount);
+    }
+    Ok(())
+}
+
+fn read_metadata(env: &Env) -> Result<Metadata, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Metadata)
+        .ok_or(Error::NotInitialized)
+}
+
+fn read_supply(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalSupply)
+        .unwrap_or(0)
+}
+
+fn write_supply(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::TotalSupply, &amount);
+    env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
+}
+
+/// Read a balance, extending its lifetime if it is close to expiring.
+///
+/// Balances live in `persistent` storage rather than `instance` storage: instance
+/// storage is a single entry shared by the whole contract, so putting every
+/// holder's balance there would make the contract's footprint grow without bound
+/// and eventually make every call unaffordable.
+fn read_balance(env: &Env, addr: &Address) -> i128 {
+    let key = DataKey::Balance(addr.clone());
+
+    match env.storage().persistent().get::<DataKey, i128>(&key) {
+        Some(balance) => {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, TTL_THRESHOLD, TTL_BUMP);
+            balance
+        }
+        None => 0,
+    }
+}
+
+fn write_balance(env: &Env, addr: &Address, amount: i128) {
+    let key = DataKey::Balance(addr.clone());
+
+    env.storage().persistent().set(&key, &amount);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_BUMP);
+}
+
+mod test;

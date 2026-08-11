@@ -1,0 +1,7 @@
+# Pinning the toolchain here means `rustup` installs the contract build target
+# automatically the first time anyone builds this project, instead of failing
+# with "target may not be installed".
+[toolchain]
+channel = "stable"
+targets = ["{% rust_target %}"]
+components = ["rustfmt", "clippy"]

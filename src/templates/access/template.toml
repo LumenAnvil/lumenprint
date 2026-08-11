@@ -1,0 +1,2 @@
+description = "An owner/admin pattern: constructor-set admin, require_auth guards, and admin transfer."
+order = 20

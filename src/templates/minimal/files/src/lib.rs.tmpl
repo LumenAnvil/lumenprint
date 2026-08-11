@@ -1,0 +1,62 @@
+#![no_std]
+//! {% project_name %} — a minimal Soroban contract.
+//!
+//! Contracts run in a `no_std` environment, so this crate uses the types
+//! `soroban_sdk` provides (`String`, `Vec`, `Symbol`) rather than the ones from
+//! `std`. Build with `{% build_command %}`.
+
+use soroban_sdk::{contract, contractimpl, symbol_short, vec, Env, String, Symbol, Vec};
+
+/// Storage key for the counter.
+///
+/// `symbol_short!` packs a symbol of up to 9 characters into a single value, so
+/// reading and writing under this key costs less than using a longer `Symbol`.
+const COUNTER: Symbol = symbol_short!("COUNTER");
+
+/// Ledgers closed in roughly one day, at the network's ~5 second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+
+/// How far into the future a touched entry's lifetime is pushed.
+const TTL_BUMP: u32 = 30 * DAY_IN_LEDGERS;
+
+/// Remaining lifetime below which an entry is bumped again.
+///
+/// Extending only when the entry is close to expiring avoids paying to rewrite
+/// the time-to-live on every access.
+const TTL_THRESHOLD: u32 = TTL_BUMP - DAY_IN_LEDGERS;
+
+#[contract]
+pub struct {% contract_name %};
+
+#[contractimpl]
+impl {% contract_name %} {
+    /// Return a greeting addressed to `to`.
+    ///
+    /// Every contract function takes `Env` first: it is the handle to storage,
+    /// ledger state, events and the host in general.
+    pub fn hello(env: Env, to: String) -> Vec<String> {
+        vec![&env, String::from_str(&env, "Hello"), to]
+    }
+
+    /// Increment the counter and return its new value.
+    pub fn increment(env: Env) -> u32 {
+        let count: u32 = env.storage().instance().get(&COUNTER).unwrap_or(0);
+        let count = count + 1;
+
+        env.storage().instance().set(&COUNTER, &count);
+
+        // Instance storage expires unless its time-to-live is extended. Without
+        // this the contract's data is archived and calls start failing weeks
+        // after deployment, long after every test passed.
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
+
+        count
+    }
+
+    /// Return the current counter value without changing it.
+    pub fn get_count(env: Env) -> u32 {
+        env.storage().instance().get(&COUNTER).unwrap_or(0)
+    }
+}
+
+mod test;

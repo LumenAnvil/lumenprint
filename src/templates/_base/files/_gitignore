@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+
+# Stellar CLI local state and identities. Never commit these: they can contain
+# secret keys.
+.stellar/
+.soroban/
+*.key
+
+.env
+.DS_Store
