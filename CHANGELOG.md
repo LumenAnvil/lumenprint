@@ -9,6 +9,8 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `lumenprint list --json`, a machine-readable listing of the templates (name,
+  description, order) for scripts and editor integrations.
 - An `events` template, demonstrating `#[contractevent]` structs and the
   publish/read pattern, with its own tests.
 
