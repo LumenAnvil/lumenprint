@@ -103,6 +103,17 @@ token    A fungible-token skeleton: balances, transfer, mint and burn. A startin
 events   An events skeleton: publishing topic/data events, with tests that read them back. Shows how contracts talk to indexers.
 ```
 
+Add `--json` for a machine-readable listing (name, description and order), for
+scripts and editor integrations:
+
+```console
+$ lumenprint list --json
+[
+  { "name": "minimal", "description": "A hello + counter contract…", "order": 10 },
+  …
+]
+```
+
 ### `lumenprint new`
 
 ```bash
