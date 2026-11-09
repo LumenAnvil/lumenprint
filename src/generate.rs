@@ -69,7 +69,7 @@ pub struct Outcome {
     pub root: PathBuf,
     /// Files written, relative to `root`, in path order.
     pub files: Vec<PathBuf>,
-    /// Whether rustfmt ran over the generated sources. See [`format_sources`].
+    /// Whether rustfmt ran over the generated sources. See `format_sources`.
     pub formatted: bool,
 }
 

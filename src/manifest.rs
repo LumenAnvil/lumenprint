@@ -1,6 +1,6 @@
 //! The template registry.
 //!
-//! Templates are discovered from the embedded [`TEMPLATES`] tree rather than
+//! Templates are discovered from the embedded `TEMPLATES` tree rather than
 //! being listed in code, which is what makes adding one a data-only change: drop
 //! a folder under `src/templates/` containing a `template.toml` and a `files/`
 //! directory, and it appears in `lumenprint list` and `lumenprint new` with no
@@ -37,7 +37,7 @@
 //! - a leading `_` on any component becomes `.`, so a template's `.gitignore` or
 //!   `.github/` does not apply to the Lumenprint repository itself
 //!
-//! Both rewrites happen in [`output_path`].
+//! Both rewrites happen in `output_path`.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
