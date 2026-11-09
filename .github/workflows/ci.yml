@@ -91,6 +91,13 @@ jobs:
           path: ~/.cargo/bin/stellar
           key: stellar-cli-${{ env.STELLAR_CLI_VERSION }}-${{ runner.os }}
 
+      # stellar-cli compiles libdbus-sys and libudev-sys from source, which need
+      # these system libraries present. Without them `cargo install` fails at the
+      # pkg-config step. Only needed when building the CLI (i.e. on a cache miss).
+      - name: Install Stellar CLI build dependencies
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
+
       - name: Install Stellar CLI
         if: steps.cache-stellar.outputs.cache-hit != 'true'
         run: cargo install --locked stellar-cli@${{ env.STELLAR_CLI_VERSION }}
