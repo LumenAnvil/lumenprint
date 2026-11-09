@@ -1,0 +1,2 @@
+description = "An events skeleton: publishing topic/data events, with tests that read them back. Shows how contracts talk to indexers."
+order = 40

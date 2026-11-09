@@ -1,0 +1,101 @@
+#![no_std]
+//! {% project_name %} — a Soroban contract that publishes events.
+//!
+//! Events are how a contract tells the outside world that something happened.
+//! They are *not* storage: a contract cannot read its own past events, and they
+//! cost nothing to keep alive. Off-chain indexers and front-ends subscribe to
+//! them to build activity feeds, notifications and analytics.
+//!
+//! Events are declared as types with the [`contractevent`] macro. Each has:
+//!
+//! - **topics** — the fields marked `#[topic]`, led by the event's name as a
+//!   `Symbol`. Indexers filter on these, so keep them small; they are the key.
+//! - **data** — the remaining fields, the payload.
+//!
+//! Declaring events as types (rather than the older, now-deprecated
+//! `env.events().publish(topics, data)`) is type-safe and records each event in
+//! the contract's interface spec, so tooling like
+//! [Lumenscan](https://github.com/LumenAnvil/lumenscan) can decode them.
+//!
+//! This contract keeps a running count in instance storage and emits an event
+//! on every change, so you can watch state and events move together. Build with
+//! `{% build_command %}`.
+
+use soroban_sdk::{
+    contract, contractevent, contractimpl, symbol_short, Address, Env, String, Symbol,
+};
+
+/// Storage key for the running ping count.
+const COUNT: Symbol = symbol_short!("COUNT");
+
+/// Ledgers closed in roughly one day, at the network's ~5 second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+
+/// How far into the future a touched entry's lifetime is pushed.
+const TTL_BUMP: u32 = 30 * DAY_IN_LEDGERS;
+
+/// Remaining lifetime below which an entry is bumped again.
+///
+/// Extending only when the entry is close to expiring avoids paying to rewrite
+/// the time-to-live on every access.
+const TTL_THRESHOLD: u32 = TTL_BUMP - DAY_IN_LEDGERS;
+
+/// Published on every `ping`.
+///
+/// The event name is the struct name in snake case, so the topics are
+/// `("ping", who)`: an indexer can subscribe to every ping, or to pings from
+/// one address, without reading the data. The data is a map `{ count }`.
+#[contractevent]
+pub struct Ping {
+    #[topic]
+    pub who: Address,
+    pub count: u32,
+}
+
+/// Published by `announce`: topic `("announce",)`, and the message itself as the
+/// data. `single-value` keeps the data the bare message rather than a one-entry
+/// map.
+#[contractevent(data_format = "single-value")]
+pub struct Announce {
+    pub message: String,
+}
+
+#[contract]
+pub struct {% contract_name %};
+
+#[contractimpl]
+impl {% contract_name %} {
+    /// Record a ping from `who`, emit a `Ping` event, and return the new total.
+    pub fn ping(env: Env, who: Address) -> u32 {
+        // Only the caller named `who` may ping as themselves. In tests, use
+        // `env.mock_all_auths()`; on-chain, the transaction must be signed.
+        who.require_auth();
+
+        let count: u32 = env.storage().instance().get(&COUNT).unwrap_or(0) + 1;
+        env.storage().instance().set(&COUNT, &count);
+
+        // Instance storage expires unless its time-to-live is extended. Without
+        // this the counter is archived weeks after deployment, long after every
+        // test passed. Events need no such upkeep — they are not stored here.
+        env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_BUMP);
+
+        // Build the event value and publish it.
+        Ping { who, count }.publish(&env);
+
+        count
+    }
+
+    /// Emit an `Announce` event carrying a free-form message.
+    ///
+    /// This writes no storage: a pure broadcast.
+    pub fn announce(env: Env, message: String) {
+        Announce { message }.publish(&env);
+    }
+
+    /// Return the current ping count without changing it or emitting anything.
+    pub fn count(env: Env) -> u32 {
+        env.storage().instance().get(&COUNT).unwrap_or(0)
+    }
+}
+
+mod test;

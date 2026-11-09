@@ -1,0 +1,82 @@
+#![cfg(test)]
+//! Tests run natively against an in-memory host, so `cargo test` needs no
+//! network, deployment or Stellar CLI.
+//!
+//! Events are read back with the SDK's `Events` test interface. An event type's
+//! `to_xdr` method (available under `testutils`) builds the exact value the
+//! contract published, which makes asserting on emitted events a one-liner.
+
+// Tests link the standard library even though the contract itself is `no_std`.
+extern crate std;
+
+use super::*;
+use soroban_sdk::{
+    testutils::{Address as _, Events as _},
+    Address, Env, Event as _, String,
+};
+
+/// Register the contract in a fresh environment and return a typed client
+/// alongside the contract's address, which tags every event it publishes.
+fn setup() -> ({% contract_name %}Client<'static>, Env, Address) {
+    let env = Env::default();
+    let contract_id = env.register({% contract_name %}, ());
+    let client = {% contract_name %}Client::new(&env, &contract_id);
+    (client, env, contract_id)
+}
+
+#[test]
+fn ping_increments_and_returns_the_new_count() {
+    let (client, env, _id) = setup();
+    env.mock_all_auths();
+    let who = Address::generate(&env);
+
+    assert_eq!(client.ping(&who), 1);
+    assert_eq!(client.ping(&who), 2);
+    assert_eq!(client.count(), 2);
+}
+
+#[test]
+fn ping_publishes_exactly_the_expected_event() {
+    let (client, env, id) = setup();
+    env.mock_all_auths();
+    let who = Address::generate(&env);
+
+    client.ping(&who);
+
+    // The event the contract should have published, built from the same type.
+    let expected = Ping {
+        who: who.clone(),
+        count: 1,
+    };
+    assert_eq!(
+        env.events().all().filter_by_contract(&id),
+        std::vec![expected.to_xdr(&env, &id)],
+    );
+}
+
+#[test]
+fn ping_without_authorization_is_rejected() {
+    let (client, env, _id) = setup();
+    // Deliberately no `mock_all_auths`: `who.require_auth()` must refuse.
+    let who = Address::generate(&env);
+
+    assert!(client.try_ping(&who).is_err());
+}
+
+#[test]
+fn announce_publishes_its_message_and_writes_no_storage() {
+    let (client, env, id) = setup();
+    let message = String::from_str(&env, "contract is live");
+
+    client.announce(&message);
+
+    let expected = Announce {
+        message: message.clone(),
+    };
+    assert_eq!(
+        env.events().all().filter_by_contract(&id),
+        std::vec![expected.to_xdr(&env, &id)],
+    );
+    // `announce` is a pure broadcast; it must not touch the counter.
+    assert_eq!(client.count(), 0);
+}

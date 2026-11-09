@@ -100,6 +100,7 @@ $ lumenprint list
 minimal  A hello + counter contract. Start here: shows contract structure, instance storage, and tests.
 access   An owner/admin pattern: constructor-set admin, require_auth guards, and admin transfer.
 token    A fungible-token skeleton: balances, transfer, mint and burn. A starting point, not an audited token.
+events   An events skeleton: publishing topic/data events, with tests that read them back. Shows how contracts talk to indexers.
 ```
 
 ### `lumenprint new`
@@ -158,6 +159,20 @@ audited and does not implement the full
 wallets and DEXes will not know how to use it. To wrap an existing Stellar asset,
 use the built-in [Stellar Asset Contract](https://developers.stellar.org/docs/tokens/stellar-asset-contract)
 instead. The generated README and the contract source both say so.
+
+### `events`
+
+How a contract emits events — the messages off-chain indexers, front-ends and
+notifications are built from. It keeps a running counter in instance storage and
+publishes an event on every change, so state and events move together in one
+small example.
+
+Events are declared as types with the `#[contractevent]` macro and published
+with `.publish(&env)`, the current, type-safe approach that also records each
+event in the contract's interface spec. The tests read the emitted events back
+with the SDK's `Events` test interface and an event type's `to_xdr` helper — the
+standard way to prove a contract emits what it should. The decoded event shapes
+are exactly what [Lumenscan](https://github.com/LumenAnvil/lumenscan) reports.
 
 ## Adding a template
 
