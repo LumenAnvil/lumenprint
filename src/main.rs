@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 
 use lumenprint::{generate, manifest, naming::Names, toolchain};
 
@@ -44,7 +45,11 @@ enum Command {
     },
 
     /// List the available templates
-    List,
+    List {
+        /// Emit the templates as JSON, for scripts and editor integrations
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,7 +59,7 @@ fn main() -> Result<()> {
             template,
             path,
         } => new(&name, &template, path),
-        Command::List => list(),
+        Command::List { json } => list(json),
     }
 }
 
@@ -92,9 +97,14 @@ fn new(name: &str, template_name: &str, path: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Print the registry as an aligned table.
-fn list() -> Result<()> {
+/// Print the registry, as an aligned table or, with `--json`, as JSON.
+fn list(as_json: bool) -> Result<()> {
     let templates = manifest::registry()?;
+
+    if as_json {
+        println!("{}", templates_json(&templates)?);
+        return Ok(());
+    }
 
     let width = templates
         .iter()
@@ -107,4 +117,73 @@ fn list() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// One template, as it appears in `lumenprint list --json`.
+///
+/// A dedicated view type keeps the JSON a deliberate public contract rather than
+/// whatever the internal `Template` happens to hold, so the two can evolve
+/// independently.
+#[derive(Debug, Serialize)]
+struct TemplateInfo<'a> {
+    /// Folder name, and the value accepted by `--template`.
+    name: &'a str,
+    /// One-line summary.
+    description: &'a str,
+    /// Sort position used for the default listing order.
+    order: u32,
+}
+
+/// Render the registry as a pretty-printed JSON array, in listing order.
+fn templates_json(templates: &[manifest::Template]) -> Result<String> {
+    let infos: Vec<TemplateInfo> = templates
+        .iter()
+        .map(|t| TemplateInfo {
+            name: &t.name,
+            description: &t.description,
+            order: t.order,
+        })
+        .collect();
+
+    Ok(serde_json::to_string_pretty(&infos)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn list_defaults_to_the_table_and_accepts_json() {
+        let cli = Cli::try_parse_from(["lumenprint", "list"]).unwrap();
+        assert!(matches!(cli.command, Command::List { json: false }));
+
+        let cli = Cli::try_parse_from(["lumenprint", "list", "--json"]).unwrap();
+        assert!(matches!(cli.command, Command::List { json: true }));
+    }
+
+    #[test]
+    fn templates_json_is_valid_and_carries_every_template() {
+        let templates = manifest::registry().unwrap();
+        let rendered = templates_json(&templates).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let array = parsed.as_array().expect("the document is a JSON array");
+        assert_eq!(array.len(), templates.len());
+
+        // Every entry has the three documented keys, and the names round-trip.
+        for (entry, template) in array.iter().zip(&templates) {
+            assert_eq!(entry["name"], template.name.as_str());
+            assert_eq!(entry["description"], template.description.as_str());
+            assert!(entry["order"].is_number());
+        }
+
+        // The listing order matches the table's (registry order).
+        assert_eq!(array[0]["name"], "minimal");
+    }
 }
