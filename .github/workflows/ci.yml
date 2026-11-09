@@ -24,7 +24,7 @@ jobs:
     name: Format, lint and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         run: |
@@ -32,7 +32,7 @@ jobs:
             --component rustfmt --component clippy
           rustup default stable
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
     name: Generate and verify every template
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         run: |
@@ -73,7 +73,7 @@ jobs:
           rustup default stable
           rustup target add wasm32v1-none
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -86,7 +86,7 @@ jobs:
       # source takes longer than everything else in this workflow combined.
       - name: Cache Stellar CLI
         id: cache-stellar
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/stellar
           key: stellar-cli-${{ env.STELLAR_CLI_VERSION }}-${{ runner.os }}
@@ -109,7 +109,7 @@ jobs:
     name: Build on the declared MSRV
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Keeps the rust-version in Cargo.toml honest. Lumenprint's own MSRV is
       # lower than the SDK's, since it is a native CLI and never compiled to wasm.
