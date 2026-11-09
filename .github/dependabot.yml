@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Rust dependencies for the CLI itself — grouped so a routine bump is one PR.
+  # The soroban-sdk version generated projects pin lives in src/toolchain.rs, not
+  # in this manifest, so it is updated deliberately rather than by Dependabot.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  # Keep the CI workflow's Actions current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
